@@ -53,6 +53,7 @@ add_definitions(${PCL_DEFINITIONS})
 # Build
 set(SOURCES ${SOURCES}
   src/dynamic_graph.cpp
+  src/multi_layer_graph.cpp
   src/planner_visualizer.cpp
   src/utility.cpp
   src/graph_planner.cpp

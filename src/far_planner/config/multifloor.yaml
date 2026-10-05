@@ -10,7 +10,8 @@ far_planner:
     local_planner_range: 5.0   # Unit: meter
     visualize_ratio: 0.75
     is_viewpoint_extend: true
-    is_multi_layer: false
+    is_multi_layer: true
+    clear_obstacle_with_free: true
 
     multi_layer/auto_floor_origin: true
     multi_layer/floor_origin_z: 0.0
@@ -18,7 +19,11 @@ far_planner:
     multi_layer/gateway_min_z_delta: 0.05
     multi_layer/gateway_max_slope: 0.6
     multi_layer/gateway_confirmations: 2
+    # Prevent the robot's floor label from flipping repeatedly near the ramp
+    # midpoint because of terrain-height noise.
     multi_layer/layer_hysteresis: 0.15
+    # Only a segment actually traversed by the robot may stitch two floors.
+    # This rejects false gateways caused by noisy contour heights on one floor.
     multi_layer/require_trajectory_evidence: true
     multi_layer/inter_layer_cost_scale: 1.25
     is_opencv_visual: false # Obstacle Image Display
@@ -32,7 +37,7 @@ far_planner:
     graph_msger/robot_id: 1  # graph from robot id "0" is extracted from files
 
     # Map Handler Params
-    map_handler/floor_height: 2.5     # Unit: meter
+    map_handler/floor_height: 2.0     # Unit: meter
     map_handler/cell_length: 5.0     # Unit: meter
     map_handler/map_grid_max_length: 1000.0   # Unit: meter
     map_handler/map_grad_max_height: 100.0   # Unit: meter
@@ -42,7 +47,9 @@ far_planner:
     util/accept_max_align_angle: 4.0  # Unit: degree
     util/obs_inflate_size: 1
     util/new_intensity_thred: 2.0
-    util/terrain_free_Z: 0.2
+    # The terrain analyser reports about 0.2 m height spread on the 18.4 deg
+    # ramp.  Keep margin above it; the 0.5 m rails remain obstacles.
+    util/terrain_free_Z: 0.30
     util/dyosb_update_thred: 4
     util/new_point_counter: 5
     util/dynamic_obs_dacay_time: 10.0 # Unit: second

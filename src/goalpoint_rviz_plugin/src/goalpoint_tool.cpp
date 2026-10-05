@@ -5,6 +5,9 @@
 #include <rviz_common/display_context.hpp>
 #include <rviz_common/logging.hpp>
 #include <rviz_common/properties/string_property.hpp>
+#include <rviz_common/properties/enum_property.hpp>
+#include <rviz_common/properties/float_property.hpp>
+#include <rviz_common/properties/int_property.hpp>
 #include <rviz_common/properties/qos_profile_property.hpp>
 
 namespace goalpoint_rviz_plugin
@@ -19,6 +22,28 @@ GoalpointTool::GoalpointTool()
   
   qos_profile_property_ = new rviz_common::properties::QosProfileProperty(
     topic_property_, qos_profile_);
+
+  height_mode_property_ = new rviz_common::properties::EnumProperty(
+    "Target height mode", "Current vehicle",
+    "Choose how the Z coordinate of the clicked cross-floor goal is computed.",
+    getPropertyContainer());
+  height_mode_property_->addOption("Current vehicle", 0);
+  height_mode_property_->addOption("Floor ID", 1);
+  height_mode_property_->addOption("Explicit Z", 2);
+
+  floor_id_property_ = new rviz_common::properties::IntProperty(
+    "Target floor ID", 0, "Zero-based target floor index.", getPropertyContainer());
+  floor_origin_z_property_ = new rviz_common::properties::FloatProperty(
+    "Floor 0 goal Z", 0.75f,
+    "Robot/goal Z on floor 0, normally vehicleHeight above the floor surface.",
+    getPropertyContainer());
+  floor_height_property_ = new rviz_common::properties::FloatProperty(
+    "Floor height", 2.0f, "Vertical distance between adjacent floor goal planes.",
+    getPropertyContainer());
+  floor_height_property_->setMin(0.01f);
+  explicit_z_property_ = new rviz_common::properties::FloatProperty(
+    "Explicit target Z", 0.75f, "Exact map-frame Z used in Explicit Z mode.",
+    getPropertyContainer());
 }
 
 GoalpointTool::~GoalpointTool() = default;
@@ -51,6 +76,7 @@ void GoalpointTool::odomHandler(const nav_msgs::msg::Odometry::ConstSharedPtr od
 
 void GoalpointTool::onPoseSet(double x, double y, double theta)
 {
+  (void)theta;
   sensor_msgs::msg::Joy joy;
 
   joy.axes.push_back(0);
@@ -83,7 +109,22 @@ void GoalpointTool::onPoseSet(double x, double y, double theta)
   goalpoint.header.stamp = joy.header.stamp;
   goalpoint.point.x = x;
   goalpoint.point.y = y;
-  goalpoint.point.z = vehicle_z;
+  switch (height_mode_property_->getOptionInt()) {
+    case 1:
+      goalpoint.point.z = floor_origin_z_property_->getFloat() +
+        floor_id_property_->getInt() * floor_height_property_->getFloat();
+      break;
+    case 2:
+      goalpoint.point.z = explicit_z_property_->getFloat();
+      break;
+    default:
+      goalpoint.point.z = vehicle_z;
+      break;
+  }
+
+  RVIZ_COMMON_LOG_INFO_STREAM(
+    "Publishing goal (" << goalpoint.point.x << ", " << goalpoint.point.y <<
+    ", " << goalpoint.point.z << ") in map frame");
 
   pub_->publish(goalpoint);
   usleep(10000);

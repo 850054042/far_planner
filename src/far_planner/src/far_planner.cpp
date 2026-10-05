@@ -73,6 +73,7 @@ void FARMaster::Init() {
   /* init Dynamic Planner Processing Objects */
   contour_detector_.Init(cdetect_params_);
   graph_manager_.Init(nh_, graph_params_);
+  multi_layer_graph_.Init(nh_, layer_params_);
   graph_planner_.Init(nh_, gp_params_);
   contour_graph_.Init(nh_, cg_params_);
   planner_viz_.Init(nh_);
@@ -147,6 +148,7 @@ void FARMaster::ResetEnvironmentAndGraph() {
     std::cout<< "\033[1;31m V-Graph Resetting...\033[0m\n" << std::endl;
   }
   graph_manager_.ResetCurrentGraph();
+  multi_layer_graph_.Reset();
   map_handler_.ResetGripMapCloud();
   graph_planner_.ResetPlannerInternalValues();
   contour_graph_.ResetCurrentContour();
@@ -226,6 +228,7 @@ void FARMaster::MainLoopCallBack() {
 
   /* Update v-graph in other modules */
   nav_graph_ = graph_manager_.GetNavGraph();
+  multi_layer_graph_.Update(nav_graph_, odom_node_ptr_);
   if (is_graph_init_) {
     if (!FARUtil::IsDebug) printf("\033[2K");
     std::cout<<"    "<<"Global V-Graph Updated. Number of global vertices: "<<nav_graph_.size()<<std::endl;
@@ -244,6 +247,7 @@ void FARMaster::MainLoopCallBack() {
   }
   planner_viz_.VizNodes(clear_nodes_, "clear_nodes", VizColor::ORANGE);
   planner_viz_.VizNodes(graph_manager_.GetOutContourNodes(), "out_contour", VizColor::YELLOW);
+  planner_viz_.VizNodes(multi_layer_graph_.GetGatewayNodes(), "floor_gateways", VizColor::PURPLE, 1.25, 1.0);
   planner_viz_.VizPoint3D(FARUtil::free_odom_p, "free_odom_position", VizColor::ORANGE, 1.0);
   planner_viz_.VizGraph(nav_graph_);
   planner_viz_.VizContourGraph(ContourGraph::contour_graph_);
@@ -376,6 +380,13 @@ void FARMaster::LocalBoundaryHandler(const std::vector<PointPair>& local_boundar
 
 
 Point3D FARMaster::ProjectNavWaypoint(const NavNodePtr& nav_node_ptr, const NavNodePtr& last_point_ptr) {
+  // Gateway endpoints come from a terrain-validated/traversed connection.
+  // Viewpoint extension was designed for obstacle-corner nodes and can push a
+  // gateway target sideways into a ramp rail or beyond the ramp surface.
+  if (FARUtil::IsMultiLayer && nav_node_ptr->is_gateway) {
+    nav_heading_ = (nav_node_ptr->position - robot_pos_).normalize();
+    return nav_node_ptr->position;
+  }
   bool is_momentum = false;
   if (last_point_ptr == nav_node_ptr || (last_point_ptr != NULL && (last_point_ptr->position - nav_node_ptr_->position).norm() < FARUtil::kNearDist)) {
     is_momentum = true;
@@ -461,6 +472,7 @@ void FARMaster::LoadROSParams() {
   const std::string planner_prefix  = "g_planner";
   const std::string contour_prefix  = "contour_graph";
   const std::string msger_prefix    = "graph_msger";
+  const std::string layer_prefix    = "multi_layer";
 
    // master params
   nh_->declare_parameter<float>("main_run_freq", 5.0);
@@ -473,6 +485,7 @@ void FARMaster::LoadROSParams() {
   nh_->declare_parameter<float>("visualize_ratio", 1.0);
   nh_->declare_parameter<bool>("is_viewpoint_extend", true);
   nh_->declare_parameter<bool>("is_multi_layer", false);
+  nh_->declare_parameter<bool>("clear_obstacle_with_free", false);
   nh_->declare_parameter<bool>("is_opencv_visual", true);
   nh_->declare_parameter<bool>("is_static_env", true);
   nh_->declare_parameter<bool>("is_pub_boundary", true);
@@ -491,6 +504,7 @@ void FARMaster::LoadROSParams() {
   nh_->get_parameter("visualize_ratio", master_params_.viz_ratio);
   nh_->get_parameter("is_viewpoint_extend", master_params_.is_viewpoint_extend);
   nh_->get_parameter("is_multi_layer", master_params_.is_multi_layer);
+  nh_->get_parameter("clear_obstacle_with_free", master_params_.clear_obstacle_with_free);
   nh_->get_parameter("is_opencv_visual", master_params_.is_visual_opencv);
   nh_->get_parameter("is_static_env", master_params_.is_static_env);
   nh_->get_parameter("is_pub_boundary", master_params_.is_pub_boundary);
@@ -565,6 +579,29 @@ void FARMaster::LoadROSParams() {
   FARUtil::kMarginHeight   = FARUtil::kTolerZ - FARUtil::kCellHeight / 2.0f;
   FARUtil::kTerrainRange   = master_params_.terrain_range;
   FARUtil::kLocalPlanRange = master_params_.local_planner_range;
+
+  // Multi-floor graph and gateway parameters
+  nh_->declare_parameter<bool>(layer_prefix + "/auto_floor_origin", true);
+  nh_->declare_parameter<float>(layer_prefix + "/floor_origin_z", 0.0);
+  nh_->declare_parameter<float>(layer_prefix + "/gateway_max_xy_dist", 1.5);
+  nh_->declare_parameter<float>(layer_prefix + "/gateway_min_z_delta", 0.05);
+  nh_->declare_parameter<float>(layer_prefix + "/gateway_max_slope", 0.6);
+  nh_->declare_parameter<int>(layer_prefix + "/gateway_confirmations", 2);
+  nh_->declare_parameter<float>(layer_prefix + "/layer_hysteresis", 0.15);
+  nh_->declare_parameter<bool>(layer_prefix + "/require_trajectory_evidence", true);
+  nh_->declare_parameter<float>(layer_prefix + "/inter_layer_cost_scale", 1.25);
+
+  nh_->get_parameter(layer_prefix + "/auto_floor_origin", layer_params_.auto_floor_origin);
+  nh_->get_parameter(layer_prefix + "/floor_origin_z", layer_params_.floor_origin_z);
+  nh_->get_parameter(layer_prefix + "/gateway_max_xy_dist", layer_params_.gateway_max_xy_dist);
+  nh_->get_parameter(layer_prefix + "/gateway_min_z_delta", layer_params_.gateway_min_z_delta);
+  nh_->get_parameter(layer_prefix + "/gateway_max_slope", layer_params_.gateway_max_slope);
+  nh_->get_parameter(layer_prefix + "/gateway_confirmations", layer_params_.gateway_confirmations);
+  nh_->get_parameter(layer_prefix + "/layer_hysteresis", layer_params_.layer_hysteresis);
+  nh_->get_parameter(layer_prefix + "/require_trajectory_evidence", layer_params_.require_trajectory_evidence);
+  nh_->get_parameter(layer_prefix + "/inter_layer_cost_scale", FARUtil::kInterLayerCostScale);
+  layer_params_.enabled = master_params_.is_multi_layer;
+  layer_params_.floor_height = map_params_.floor_height;
 
   // graph planner params
   nh_->declare_parameter<float>(planner_prefix + "/converge_distance", 1.0);
@@ -733,6 +770,12 @@ void FARMaster::TerrainCallBack(const sensor_msgs::msg::PointCloud2::SharedPtr p
     }
     map_handler_.UpdateObsCloudGrid(temp_obs_ptr_);
     map_handler_.UpdateFreeCloudGrid(temp_free_ptr_);
+    // A continuous ramp can fluctuate around the terrain intensity threshold.
+    // Clear stale obstacle samples when the same 3-D voxel is subsequently
+    // confirmed as free, otherwise the static map can retain a false wall.
+    if (master_params_.clear_obstacle_with_free) {
+      map_handler_.RemoveObsCloudFromGrid(temp_free_ptr_);
+    }
     // extract new points
     FARUtil::ExtractNewObsPointCloud(temp_obs_ptr_,
                                      FARUtil::surround_obs_cloud_,
@@ -864,6 +907,10 @@ int     FARUtil::kDyObsThred;
 int     FARUtil::KNewPointC;
 int     FARUtil::kObsInflate;
 float   FARUtil::kTolerZ;
+float   FARUtil::kFloorHeight;
+float   FARUtil::kFloorOriginZ;
+float   FARUtil::kInterLayerCostScale = 1.0f;
+bool    FARUtil::IsFloorOriginInitialized = false;
 float   FARUtil::kAcceptAlign;
 bool    FARUtil::IsStaticEnv;
 bool    FARUtil::IsDebug;

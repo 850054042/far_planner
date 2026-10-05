@@ -27,6 +27,10 @@ void DynamicGraph::Init(const rclcpp::Node::SharedPtr nh, const DynamicGraphPara
 
 void DynamicGraph::UpdateRobotPosition(const Point3D& robot_pos) {
     robot_pos_ = robot_pos;
+    if (FARUtil::IsMultiLayer && !FARUtil::IsFloorOriginInitialized) {
+        FARUtil::kFloorOriginZ = robot_pos.z;
+        FARUtil::IsFloorOriginInitialized = true;
+    }
     terrain_planner_.SetLocalTerrainObsCloud(FARUtil::local_terrain_obs_);
     if (odom_node_ptr_ == NULL) {
         this->CreateNavNodeFromPoint(robot_pos_, odom_node_ptr_, true);
@@ -465,7 +469,15 @@ bool DynamicGraph::UpdateNodePosition(const NavNodePtr& node_ptr,
                                       const Point3D& new_pos) 
 {
     if (FARUtil::IsFreeNavNode(node_ptr)) {
+        const int previous_layer = node_ptr->layer_id;
         this->InitNodePosition(node_ptr, new_pos);
+        // MultiLayerGraph owns odometry floor switching and applies
+        // hysteresis. Preserve its last decision during this earlier graph
+        // update instead of restoring the raw, noisy height classification.
+        if (FARUtil::IsMultiLayer && node_ptr->is_odom &&
+            FARUtil::IsFloorOriginInitialized) {
+            node_ptr->layer_id = previous_layer;
+        }
         return true;
     }
     if (node_ptr->is_finalized) return true; // finalized node 
@@ -487,6 +499,7 @@ bool DynamicGraph::UpdateNodePosition(const NavNodePtr& node_ptr,
 void DynamicGraph::InitNodePosition(const NavNodePtr& node_ptr, const Point3D& new_pos) {
     node_ptr->pos_filter_vec.clear();
     node_ptr->position = new_pos;
+    node_ptr->layer_id = FARUtil::LayerId(new_pos.z);
     node_ptr->pos_filter_vec.push_back(new_pos);
 }
 

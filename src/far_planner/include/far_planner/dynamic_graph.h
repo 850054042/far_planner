@@ -555,6 +555,8 @@ public:
         node_ptr->is_navpoint = is_navpoint;
         node_ptr->is_boundary = is_boundary;
         node_ptr->is_goal = is_goal;
+        node_ptr->layer_id = FARUtil::LayerId(point.z);
+        node_ptr->is_gateway = false;
         node_ptr->clear_dumper_count = 0;
         node_ptr->frontier_votes.clear();
         node_ptr->invalid_boundary.clear();
@@ -564,6 +566,7 @@ public:
         node_ptr->contour_votes.clear();
         node_ptr->potential_contours.clear();
         node_ptr->trajectory_connects.clear();
+        node_ptr->gateway_connects.clear();
         node_ptr->trajectory_votes.clear();
         node_ptr->terrain_votes.clear();
         node_ptr->free_direct = (is_odom || is_navpoint) ? NodeFreeDirect::PILLAR : NodeFreeDirect::UNKNOW;
@@ -589,6 +592,10 @@ public:
         for (const auto& pnode_ptr: node_ptr->poly_connects) {
             FARUtil::EraseNodeFromStack(node_ptr, pnode_ptr->poly_connects);
         }
+        for (const auto& gnode_ptr: node_ptr->gateway_connects) {
+            FARUtil::EraseNodeFromStack(node_ptr, gnode_ptr->gateway_connects);
+            gnode_ptr->is_gateway = !gnode_ptr->gateway_connects.empty();
+        }
         for (const auto& pt_cnode_ptr : node_ptr->potential_edges) {
             FARUtil::EraseNodeFromStack(node_ptr, pt_cnode_ptr->potential_edges);
             pt_cnode_ptr->edge_votes.erase(node_ptr->id);
@@ -597,6 +604,8 @@ public:
         node_ptr->poly_connects.clear();
         node_ptr->edge_votes.clear();
         node_ptr->potential_edges.clear();
+        node_ptr->gateway_connects.clear();
+        node_ptr->is_gateway = false;
     }
 
     static inline void ClearGoalNodeInGraph(const NavNodePtr& node_ptr) {

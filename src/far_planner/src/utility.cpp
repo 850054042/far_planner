@@ -214,7 +214,7 @@ void FARUtil::ExtractFreeAndObsCloud(const PointCloudPtr& newCloudIn,
   std::size_t obs_idx = 0;
   // iteratte through points
   for (const auto& p : newCloudIn->points) {
-    if (p.intensity < FARUtil::kFreeZ) {
+    if (p.intensity <= FARUtil::kFreeZ) {
       freeCloudOut->points[free_idx] = p;
       free_idx ++;
     } else {

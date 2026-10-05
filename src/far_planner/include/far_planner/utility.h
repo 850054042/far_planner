@@ -113,6 +113,10 @@ public:
     static int   KNewPointC;
     static int   kObsInflate;
     static float kTolerZ;
+    static float kFloorHeight;
+    static float kFloorOriginZ;
+    static float kInterLayerCostScale;
+    static bool  IsFloorOriginInitialized;
     static float kAcceptAlign;
     static float kVizRatio;
     static double systemStartTime;
@@ -313,10 +317,17 @@ public:
 
     template <typename NodeType1, typename NodeType2>
     static inline bool IsAtSameLayer(const NodeType1& node_ptr1, const NodeType2& node_ptr2) {
-        if (FARUtil::IsMultiLayer && abs(node_ptr1->position.z - node_ptr2->position.z) > FARUtil::kTolerZ) {
-            return false;
-        }
-        return true;
+        return !FARUtil::IsMultiLayer || node_ptr1->layer_id == node_ptr2->layer_id;
+    }
+
+    static inline int LayerId(const float z) {
+        if (!IsMultiLayer || !IsFloorOriginInitialized || kFloorHeight < kEpsilon) return 0;
+        return static_cast<int>(std::lround((z - kFloorOriginZ) / kFloorHeight));
+    }
+
+    static inline bool IsGatewayConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
+        return IsTypeInStack(node_ptr2, node_ptr1->gateway_connects) &&
+               IsTypeInStack(node_ptr1, node_ptr2->gateway_connects);
     }
 
     template <typename T_vec>

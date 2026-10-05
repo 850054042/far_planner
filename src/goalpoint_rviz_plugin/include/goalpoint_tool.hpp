@@ -15,6 +15,9 @@
 
 #include <rviz_common/display_context.hpp>
 #include <rviz_common/properties/string_property.hpp>
+#include <rviz_common/properties/enum_property.hpp>
+#include <rviz_common/properties/float_property.hpp>
+#include <rviz_common/properties/int_property.hpp>
 #include <rviz_common/tool.hpp>
 
 namespace rviz_common
@@ -56,6 +59,11 @@ private:
   
   rviz_common::properties::StringProperty * topic_property_;
   rviz_common::properties::QosProfileProperty * qos_profile_property_;
+  rviz_common::properties::EnumProperty * height_mode_property_;
+  rviz_common::properties::IntProperty * floor_id_property_;
+  rviz_common::properties::FloatProperty * floor_origin_z_property_;
+  rviz_common::properties::FloatProperty * floor_height_property_;
+  rviz_common::properties::FloatProperty * explicit_z_property_;
 
   rclcpp::QoS qos_profile_;
 };

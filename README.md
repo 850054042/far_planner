@@ -66,6 +66,21 @@ Users have the option to define custom navigation boundaries. To do this, user
 ros2 launch boundary_handler boundary_handler.launch
 ```
 
+## Multi-floor navigation
+
+For continuous ramps or traversable stairs, launch the development environment
+and use the dedicated multi-floor planner configuration:
+
+```bash
+ros2 launch vehicle_simulator system_multifloor_ramp.launch
+ros2 launch far_planner far_planner.launch config:=multifloor
+```
+
+This mode builds one visibility graph per floor and stitches adjacent floors
+only through confirmed gateway edges. Gateway nodes are shown in purple. See
+[the multi-floor design document](docs/MULTI_FLOOR_DESIGN.md) for the algorithm,
+assumptions and parameter tuning guide.
+
 ## Configuration
 
 FAR Planner settings are kept in default.yaml in the 'src/far_planner/config' folder. For Matterport3D environments, the settings are in matterport.yaml in the same folder.

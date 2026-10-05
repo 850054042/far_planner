@@ -82,6 +82,11 @@ struct NavNode
     bool is_finalized;
     bool is_navpoint;
     bool is_boundary;
+    // Multi-floor topology. Regular visibility edges stay inside one layer;
+    // gateway_connects are the only edges allowed to cross layer boundaries.
+    int layer_id;
+    bool is_gateway;
+    std::vector<std::shared_ptr<NavNode>> gateway_connects;
     int  clear_dumper_count;
     std::deque<int> frontier_votes;
     std::unordered_set<std::size_t> invalid_boundary;

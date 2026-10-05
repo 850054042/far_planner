@@ -10,6 +10,7 @@
 #include "planner_visualizer.h"
 #include "scan_handler.h"
 #include "graph_msger.h"
+#include "multi_layer_graph.h"
 
 
 struct FARMasterParams {
@@ -23,6 +24,7 @@ struct FARMasterParams {
     float main_run_freq;
     float viz_ratio;
     bool  is_multi_layer;
+    bool  clear_obstacle_with_free;
     bool  is_viewpoint_extend;
     bool  is_visual_opencv;
     bool  is_static_env;
@@ -116,6 +118,7 @@ private:
     MapHandler map_handler_;
     ScanHandler scan_handler_;
     GraphMsger graph_msger_;
+    MultiLayerGraph multi_layer_graph_;
 
     /* ROS Params */
     FARMasterParams     master_params_;
@@ -126,6 +129,7 @@ private:
     MapHandlerParams    map_params_;
     ScanHandlerParams   scan_params_;
     GraphMsgerParams    msger_parmas_;
+    MultiLayerGraphParams layer_params_;
 
     void LoadROSParams();
 

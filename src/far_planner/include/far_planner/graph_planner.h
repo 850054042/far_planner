@@ -124,7 +124,11 @@ inline bool IsResetBlockStatus(const NavNodePtr& node_ptr, const NavNodePtr& goa
 inline float EulerCost(const NavNodePtr& current_node,
                        const NavNodePtr& neighbor_node) 
 {
-    return (current_node->position - neighbor_node->position).norm();
+    float cost = (current_node->position - neighbor_node->position).norm();
+    if (FARUtil::IsMultiLayer && current_node->layer_id != neighbor_node->layer_id) {
+        cost *= FARUtil::kInterLayerCostScale;
+    }
+    return cost;
 }
 
 inline void GoalReset() {

@@ -54,6 +54,8 @@ void GraphPlanner::UpdateGraphTraverability(const NavNodePtr& odom_node_ptr, con
         current->is_traversable = true; // reachable from current position
         for (const auto& neighbor : current->connect_nodes) {
             if (close_set.count(neighbor->id) || this->IsInvalidBoundary(current, neighbor)) continue;
+            if (FARUtil::IsMultiLayer && !FARUtil::IsAtSameLayer(current, neighbor) &&
+                !FARUtil::IsGatewayConnect(current, neighbor)) continue;
             float edist = this->EulerCost(current, neighbor);
             if (neighbor == goal_ptr && edist > FARUtil::kEpsilon && !FARUtil::IsAtSameLayer(neighbor, current)) { // check for multi layer traverse cost
                 const Point3D diff_p = neighbor->position - current->position;
@@ -90,6 +92,8 @@ void GraphPlanner::UpdateGraphTraverability(const NavNodePtr& odom_node_ptr, con
         current->is_free_traversable = true; // reachable from current position
         for (const auto& neighbor : current->connect_nodes) {
             if (!neighbor->is_covered || close_set.count(neighbor->id) || this->IsInvalidBoundary(current, neighbor)) continue;
+            if (FARUtil::IsMultiLayer && !FARUtil::IsAtSameLayer(current, neighbor) &&
+                !FARUtil::IsGatewayConnect(current, neighbor)) continue;
             const float e_dist = this->EulerCost(current, neighbor);
             if (neighbor == goal_ptr && (!is_goal_in_freespace_ || e_dist > FARUtil::kTerrainRange)) continue;
             const float temp_fgscore = current->fgscore + e_dist;
@@ -128,6 +132,7 @@ void GraphPlanner::UpdateGoalNavNodeConnects(const NavNodePtr& goal_ptr)
 }
 
 bool GraphPlanner::IsValidConnectToGoal(const NavNodePtr& node_ptr, const NavNodePtr& goal_node_ptr) {
+    if (FARUtil::IsMultiLayer && !FARUtil::IsAtSameLayer(node_ptr, goal_node_ptr)) return false;
     if (node_ptr->is_traversable && (!node_ptr->is_block_to_goal || IsResetBlockStatus(node_ptr, goal_node_ptr))) {
         const Point3D diff_p = goal_node_ptr->position - node_ptr->position;
         if (DynamicGraph::IsConvexConnect(node_ptr, goal_node_ptr) && (!FARUtil::IsAtSameLayer(node_ptr, goal_node_ptr) || FARUtil::IsOutReducedDirs(diff_p, node_ptr)) && 
@@ -304,13 +309,47 @@ NavNodePtr GraphPlanner::NextNavWaypointFromPath(const NodePtrStack& global_path
     const std::size_t path_size = global_path.size();
     std::size_t nav_idx = 1;
     nav_point_ptr = global_path[nav_idx];
-    float dist = (nav_point_ptr->position - odom_node_ptr_->position).norm();
+    auto waypoint_distance = [this](const NavNodePtr& node_ptr) {
+        const Point3D delta = node_ptr->position - odom_node_ptr_->position;
+        // The downstream path follower controls only x/y.  Requiring 3-D
+        // convergence at a layer-transition node can deadlock it at the
+        // gateway: it has no independent command with which to close a
+        // remaining z error.  A gateway is already terrain/traversal verified,
+        // so advance through its two endpoints using planar convergence.
+        if (FARUtil::IsMultiLayer && node_ptr->is_gateway) {
+            return std::hypot(delta.x, delta.y);
+        }
+        return delta.norm();
+    };
+    float dist = waypoint_distance(nav_point_ptr);
     while (dist < gp_params_.converge_dist) {
         nav_idx ++;
         if (nav_idx < path_size) {
             nav_point_ptr = global_path[nav_idx];
-            dist = (nav_point_ptr->position - odom_node_ptr_->position).norm();
+            dist = waypoint_distance(nav_point_ptr);
         } else break;
+    }
+
+    // Treat a confirmed inter-floor edge as a transition corridor rather than
+    // two independent waypoints.  Replanning at the floor boundary can
+    // otherwise alternate between the two gateway endpoints as the odometry
+    // height moves around the layer threshold.  Look through the gateway pair
+    // and command the first ordinary node on the destination floor.
+    if (FARUtil::IsMultiLayer && nav_point_ptr->is_gateway) {
+        const std::size_t search_begin = nav_idx > 0 ? nav_idx - 1 : 0;
+        for (std::size_t i = search_begin; i + 1 < path_size; ++i) {
+            if (!FARUtil::IsGatewayConnect(global_path[i], global_path[i + 1])) continue;
+            std::size_t exit_idx = i + 2;
+            while (exit_idx < path_size && global_path[exit_idx]->is_gateway) {
+                ++exit_idx;
+            }
+            if (exit_idx < path_size) {
+                nav_point_ptr = global_path[exit_idx];
+            } else {
+                nav_point_ptr = global_path.back();
+            }
+            break;
+        }
     }
     return nav_point_ptr;
 }

@@ -331,6 +331,13 @@ void MapHandler::AdjustNodesHeight(const NodePtrStack& nodes) {
         float terrain_h = TerrainHeightOfPoint(node_ptr->position, is_match, false);
         if (is_match) {
             terrain_h += FARUtil::vehicle_height;
+            // The 2-D terrain grid can contain the vertically stacked surface
+            // currently occupied by the robot.  Never pull an existing node onto
+            // another floor merely because the robot changed floors.
+            if (FARUtil::IsMultiLayer && FARUtil::IsFloorOriginInitialized &&
+                FARUtil::LayerId(terrain_h) != node_ptr->layer_id) {
+                continue;
+            }
             if (node_ptr->pos_filter_vec.empty()) {
                 node_ptr->position.z = terrain_h;
             } else {
@@ -347,9 +354,14 @@ void MapHandler::AdjustCTNodeHeight(const CTNodeStack& ctnodes) {
     const float H_MIN = FARUtil::robot_pos.z - FARUtil::kTolerZ;
     for (auto& ctnode_ptr : ctnodes) {
         float min_th, max_th;
-        NearestHeightOfRadius(ctnode_ptr->position, FARUtil::kMatchDist, min_th, max_th, ctnode_ptr->is_ground_associate);
+        const float terrain_h = NearestHeightOfRadius(
+            ctnode_ptr->position, FARUtil::kMatchDist, min_th, max_th,
+            ctnode_ptr->is_ground_associate);
         if (ctnode_ptr->is_ground_associate) {
-            ctnode_ptr->position.z = min_th + FARUtil::vehicle_height;
+            // Using min_th biases every point toward the downhill end of the
+            // search disk and visibly warps obstacle boundaries on a ramp.  The
+            // local mean follows a planar slope without that directional bias.
+            ctnode_ptr->position.z = terrain_h + FARUtil::vehicle_height;
             ctnode_ptr->position.z = std::max(std::min(ctnode_ptr->position.z, H_MAX), H_MIN);
         } else {
             ctnode_ptr->position.z = TerrainHeightOfPoint(ctnode_ptr->position, ctnode_ptr->is_ground_associate, true);
@@ -539,4 +551,3 @@ void MapHandler::RemoveObsCloudFromGrid(const PointCloudPtr& obsCloud) {
         }
     }
 }
-
