@@ -4,7 +4,9 @@ far_planner:
     main_run_freq: 2.5
     voxel_dim: 0.15  # Unit: meter
     robot_dim: 0.8   # Unit: meter
-    vehicle_height: 0.75  # Unit: meter
+    # Must match vehicleHeight in the Go2-W stair simulator. Otherwise graph
+    # nodes are lifted 0.20 m above odometry and terrain associations drift.
+    vehicle_height: 0.55  # Unit: meter
     sensor_range: 30.0  # Unit: meter
     terrain_range: 15.0  # Unit: meter
     local_planner_range: 5.0   # Unit: meter
@@ -15,9 +17,12 @@ far_planner:
 
     multi_layer/auto_floor_origin: true
     multi_layer/floor_origin_z: 0.0
-    multi_layer/gateway_max_xy_dist: 1.5
+    # Trajectory nodes are roughly robot_dim (0.8 m) apart. On discrete 0.15 m
+    # steps their placement can skip several tread boundaries, so keep margin
+    # for a sparse but physically traversed edge.
+    multi_layer/gateway_max_xy_dist: 2.0
     multi_layer/gateway_min_z_delta: 0.05
-    multi_layer/gateway_max_slope: 0.6
+    multi_layer/gateway_max_slope: 0.85
     multi_layer/gateway_confirmations: 2
     # Prevent the robot's floor label from flipping repeatedly near the ramp
     # midpoint because of terrain-height noise.
@@ -37,7 +42,7 @@ far_planner:
     graph_msger/robot_id: 1  # graph from robot id "0" is extracted from files
 
     # Map Handler Params
-    map_handler/floor_height: 2.0     # Unit: meter
+    map_handler/floor_height: 2.1     # Unit: meter (14 * 0.15 m)
     map_handler/cell_length: 5.0     # Unit: meter
     map_handler/map_grid_max_length: 1000.0   # Unit: meter
     map_handler/map_grad_max_height: 100.0   # Unit: meter

@@ -66,9 +66,12 @@ bool DynamicGraph::IsInterNavpointNecessary() {
 }
 
 bool DynamicGraph::ExtractGraphNodes(const CTNodeStack& new_ctnodes) {
-    if (new_ctnodes.empty()) return false;
     NavNodePtr new_node_ptr = NULL;
     new_nodes_.clear();
+    // Inter-navigation nodes record where the robot really travelled. They are
+    // also the evidence used to create multi-floor gateways, so their creation
+    // must not depend on detecting a new obstacle corner. A correctly
+    // classified open staircase commonly has no new contour nodes at all.
     if (this->IsInterNavpointNecessary()) { // check wheter or not need inter navigation points
         if (FARUtil::IsDebug) RCLCPP_INFO(nh_->get_logger(), "DG: One trajectory node has been created.");
         this->CreateNavNodeFromPoint(last_connect_pos_, new_node_ptr, false, true);

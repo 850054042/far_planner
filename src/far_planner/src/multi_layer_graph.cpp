@@ -121,6 +121,10 @@ void MultiLayerGraph::Update(NodePtrStack& graph, const NavNodePtr& odom_node) {
 
     // A traversed trajectory is the strongest possible evidence of a gateway.
     // It is therefore accepted immediately and remains available for replanning.
+    int trajectory_edges = 0;
+    int cross_layer_trajectory_edges = 0;
+    int rejected_cross_layer_edges = 0;
+    bool traversed_gateway_found = false;
     for (const auto& node : graph) {
         if (node == nullptr || node->is_odom || !node->is_navpoint) continue;
         for (const auto& neighbor : node->trajectory_connects) {
@@ -128,11 +132,73 @@ void MultiLayerGraph::Update(NodePtrStack& graph, const NavNodePtr& odom_node) {
             // persistent evidence that the robot physically traversed this
             // segment; one endpoint may leave the local active window before
             // the layer transition is processed.
-            if (neighbor != nullptr && neighbor->is_navpoint &&
-                node->id < neighbor->id && IsGatewayStillValid(node, neighbor)) {
-                ActivateGateway(node, neighbor);
+            if (neighbor != nullptr && neighbor->is_navpoint && node->id < neighbor->id) {
+                trajectory_edges++;
+                if (!FARUtil::IsAtSameLayer(node, neighbor)) {
+                    cross_layer_trajectory_edges++;
+                    if (IsGatewayStillValid(node, neighbor)) {
+                        ActivateGateway(node, neighbor);
+                        traversed_gateway_found = true;
+                    } else {
+                        rejected_cross_layer_edges++;
+                    }
+                }
             }
         }
+    }
+
+    if (!gateway_nodes_.empty()) traversed_gateway_found = true;
+
+    // The dynamic graph may skip a direct trajectory connection when a stair
+    // node temporarily leaves the local active set. If both adjacent floors
+    // nevertheless contain navpoints created from the robot's real path, use
+    // the closest geometrically valid pair as the traversed transition. This
+    // remains stricter than ordinary visibility-edge inference because contour
+    // and frontier nodes are never considered.
+    if (!traversed_gateway_found && robot_layer_initialized_ && robot_layer_id_ != 0) {
+        NavNodePtr best_node1 = nullptr;
+        NavNodePtr best_node2 = nullptr;
+        float best_distance = FARUtil::kINF;
+        for (std::size_t i = 0; i < graph.size(); ++i) {
+            const auto& node1 = graph[i];
+            if (node1 == nullptr || node1->is_odom || !node1->is_navpoint) continue;
+            for (std::size_t j = i + 1; j < graph.size(); ++j) {
+                const auto& node2 = graph[j];
+                if (node2 == nullptr || node2->is_odom || !node2->is_navpoint ||
+                    FARUtil::IsAtSameLayer(node1, node2) ||
+                    !IsGatewayStillValid(node1, node2)) continue;
+                const float distance = (node2->position - node1->position).norm();
+                if (distance < best_distance) {
+                    best_distance = distance;
+                    best_node1 = node1;
+                    best_node2 = node2;
+                }
+            }
+        }
+        if (best_node1 != nullptr && best_node2 != nullptr) {
+            const bool recovered_is_new =
+                !FARUtil::IsGatewayConnect(best_node1, best_node2);
+            ActivateGateway(best_node1, best_node2);
+            traversed_gateway_found = true;
+            if (recovered_is_new) {
+                RCLCPP_INFO(nh_->get_logger(),
+                    "Recovered traversed gateway from nearest adjacent-layer "
+                    "trajectory nodes (distance %.2f m).", best_distance);
+            }
+        }
+    }
+
+    if (robot_layer_initialized_ && robot_layer_id_ != 0 &&
+        !traversed_gateway_found &&
+        (cross_layer_trajectory_edges == 0 ||
+         rejected_cross_layer_edges == cross_layer_trajectory_edges)) {
+        RCLCPP_WARN_THROTTLE(
+            nh_->get_logger(), *nh_->get_clock(), 5000,
+            "No gateway yet on layer %d: trajectory_edges=%d, cross_layer=%d, "
+            "geometry_rejected=%d (max_xy=%.2f, max_slope=%.2f)",
+            robot_layer_id_, trajectory_edges, cross_layer_trajectory_edges,
+            rejected_cross_layer_edges, params_.gateway_max_xy_dist,
+            params_.gateway_max_slope);
     }
 
     // Seed PCT-style candidates from terrain-validated graph edges. Candidates
