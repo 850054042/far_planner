@@ -40,6 +40,30 @@ void MultiLayerGraph::RefreshLayers(const NodePtrStack& graph) {
             robot_layer_id_ = measured_layer;
             robot_layer_initialized_ = true;
         } else if (measured_layer != robot_layer_id_) {
+            // Reaching the opposite endpoint of a confirmed gateway is
+            // stronger transition evidence than raw height alone.  A compact
+            // staircase can place that endpoint inside the normal hysteresis
+            // band; waiting for a further Z change then deadlocks because the
+            // planar local planner stops at the endpoint XY.
+            bool reached_confirmed_gateway = false;
+            for (const auto& gateway : gateway_nodes_) {
+                if (gateway == nullptr || gateway->layer_id != measured_layer) continue;
+                const Point3D delta = gateway->position - node->position;
+                if (std::hypot(delta.x, delta.y) <= FARUtil::kNearDist &&
+                    std::abs(delta.z) <= params_.floor_height * 0.5f) {
+                    reached_confirmed_gateway = true;
+                    break;
+                }
+            }
+            if (reached_confirmed_gateway) {
+                RCLCPP_INFO(
+                    nh_->get_logger(),
+                    "MultiLayerGraph: gateway-confirmed robot layer switch %d -> %d at z %.2f.",
+                    robot_layer_id_, measured_layer, node->position.z);
+                robot_layer_id_ = measured_layer;
+                node->layer_id = robot_layer_id_;
+                continue;
+            }
             const int direction = measured_layer > robot_layer_id_ ? 1 : -1;
             const float boundary_z = FARUtil::kFloorOriginZ +
                 (static_cast<float>(robot_layer_id_) + 0.5f * direction) *
@@ -134,7 +158,14 @@ void MultiLayerGraph::Update(NodePtrStack& graph, const NavNodePtr& odom_node) {
             // the layer transition is processed.
             if (neighbor != nullptr && neighbor->is_navpoint && node->id < neighbor->id) {
                 trajectory_edges++;
-                if (!FARUtil::IsAtSameLayer(node, neighbor)) {
+                if (FARUtil::IsAtSameLayer(node, neighbor)) {
+                    // Inter-navigation nodes are physical breadcrumbs left by
+                    // the robot.  Keep their same-floor planning edge alive
+                    // even after the nodes leave the local graph-maintenance
+                    // window, otherwise an upper-floor odom node can no longer
+                    // find its way back to a persistent stair gateway.
+                    DynamicGraph::AddEdge(node, neighbor);
+                } else {
                     cross_layer_trajectory_edges++;
                     if (IsGatewayStillValid(node, neighbor)) {
                         ActivateGateway(node, neighbor);
@@ -272,6 +303,26 @@ void MultiLayerGraph::Update(NodePtrStack& graph, const NavNodePtr& odom_node) {
                 DynamicGraph::AddEdge(node, neighbor);
             }
         }
+    }
+
+    // The current odometry node is transient rather than part of the stored
+    // breadcrumb chain. Reattach it to the nearest trajectory node on its own
+    // floor so Dijkstra can enter that chain even in a narrow corner where a
+    // visibility/polygon edge is momentarily unavailable.
+    NavNodePtr nearest_traj_node = nullptr;
+    float nearest_traj_dist = FARUtil::kINF;
+    for (const auto& node : graph) {
+        if (node == nullptr || node->is_odom || !node->is_navpoint ||
+            node->layer_id != odom_node->layer_id || node->trajectory_connects.empty()) continue;
+        const float distance = (node->position - odom_node->position).norm();
+        if (distance < nearest_traj_dist && distance <= FARUtil::kNearDist * 2.0f &&
+            ContourGraph::IsNavNodesConnectFreePolygon(odom_node, node)) {
+            nearest_traj_dist = distance;
+            nearest_traj_node = node;
+        }
+    }
+    if (nearest_traj_node != nullptr) {
+        DynamicGraph::AddEdge(odom_node, nearest_traj_node);
     }
 
     gateway_nodes_.clear();

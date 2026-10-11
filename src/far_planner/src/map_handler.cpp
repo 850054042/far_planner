@@ -16,7 +16,11 @@ void MapHandler::Init(const MapHandlerParams& params) {
     const int col_num = row_num;
     int level_num = std::ceil(map_params_.grid_max_height / map_params_.cell_height);
     neighbor_Lnum_ = std::ceil(map_params_.sensor_range * 2.0f / map_params_.cell_length) + 1; 
-    neighbor_Hnum_ = 5; 
+    // In multi-floor buildings a five-cell vertical window can include the
+    // floor directly above/below at the same XY and project it into the local
+    // 2-D contour. Keep only the current vertical band; the persistent world
+    // cloud remains fully 3-D and gateway edges connect bands explicitly.
+    neighbor_Hnum_ = FARUtil::IsMultiLayer ? 3 : 5;
     if (level_num % 2 == 0) level_num ++;           // force to odd number, robot will be at center
     if (neighbor_Lnum_ % 2 == 0) neighbor_Lnum_ ++; // force to odd number
 
@@ -328,7 +332,13 @@ void MapHandler::AdjustNodesHeight(const NodePtrStack& nodes) {
             continue;
         } 
         bool is_match = false;
-        float terrain_h = TerrainHeightOfPoint(node_ptr->position, is_match, false);
+        // The rolling 2-D terrain grid intentionally contains only the surface
+        // connected to the robot. For historical nodes on a vertically
+        // overlapping floor, query the persistent 3-D free-cloud column around
+        // the node's own Z instead of using the robot's current surface.
+        float terrain_h = FARUtil::IsMultiLayer
+            ? NearestTerrainHeightofNavPoint(node_ptr->position, is_match)
+            : TerrainHeightOfPoint(node_ptr->position, is_match, false);
         if (is_match) {
             terrain_h += FARUtil::vehicle_height;
             // The 2-D terrain grid can contain the vertically stacked surface

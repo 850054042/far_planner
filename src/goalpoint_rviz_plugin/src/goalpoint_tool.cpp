@@ -34,15 +34,15 @@ GoalpointTool::GoalpointTool()
   floor_id_property_ = new rviz_common::properties::IntProperty(
     "Target floor ID", 0, "Zero-based target floor index.", getPropertyContainer());
   floor_origin_z_property_ = new rviz_common::properties::FloatProperty(
-    "Floor 0 goal Z", 0.75f,
+    "Floor 0 goal Z", 0.55f,
     "Robot/goal Z on floor 0, normally vehicleHeight above the floor surface.",
     getPropertyContainer());
   floor_height_property_ = new rviz_common::properties::FloatProperty(
-    "Floor height", 2.0f, "Vertical distance between adjacent floor goal planes.",
+    "Floor height", 2.1f, "Vertical distance between adjacent floor goal planes.",
     getPropertyContainer());
   floor_height_property_->setMin(0.01f);
   explicit_z_property_ = new rviz_common::properties::FloatProperty(
-    "Explicit target Z", 0.75f, "Exact map-frame Z used in Explicit Z mode.",
+    "Explicit target Z", 0.55f, "Exact map-frame Z used in Explicit Z mode.",
     getPropertyContainer());
 }
 

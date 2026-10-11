@@ -480,9 +480,9 @@ Visualization Manager:
   Tools:
     - Class: rviz_default_plugins/MoveCamera
     - Class: goalpoint_rviz_plugin/GoalpointTool
-      Explicit target Z: 0.75
-      Floor 0 goal Z: 0.75
-      Floor height: 2
+      Explicit target Z: 0.55
+      Floor 0 goal Z: 0.55
+      Floor height: 2.1
       Target floor ID: 0
       Target height mode: Floor ID
       Topic:

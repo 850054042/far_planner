@@ -161,6 +161,19 @@ bool GraphPlanner::PathToGoal(const NavNodePtr& goal_ptr,
     global_path.clear();
     _goal_p = goal_ptr->position;
     if (current_graph_.size() == 1) {
+        // A 2-D local planner cannot safely realize a goal on another floor.
+        // Wait for the visibility graph/gateway edge instead of projecting the
+        // destination-floor goal onto the robot's current floor.
+        if (FARUtil::IsMultiLayer && odom_node_ptr_->layer_id != goal_ptr->layer_id) {
+            global_path.push_back(odom_node_ptr_);
+            _nav_node_ptr = odom_node_ptr_;
+            _is_free_nav = false;
+            RCLCPP_WARN_THROTTLE(
+                nh_->get_logger(), *nh_->get_clock(), 3000,
+                "GP: cross-floor goal is waiting for a confirmed gateway path (robot layer %d, goal layer %d).",
+                odom_node_ptr_->layer_id, goal_ptr->layer_id);
+            return true;
+        }
         // update global path
         global_path.push_back(odom_node_ptr_);
         global_path.push_back(goal_ptr);
@@ -243,11 +256,85 @@ bool GraphPlanner::PathToGoal(const NavNodePtr& goal_ptr,
             if (FARUtil::IsDebug) RCLCPP_INFO_STREAM(nh_->get_logger(), "Momentum path counter: " << path_momentum_counter_ << "; Over max: "<< gp_params_.momentum_thred);
             return true;
         } else {
+            if (FARUtil::IsMultiLayer && odom_node_ptr_->layer_id != goal_ptr->layer_id) {
+                // The destination-floor graph may be temporarily disconnected
+                // from the final goal even though the current-floor entrance
+                // of a confirmed gateway is reachable. In that case perform a
+                // staged transition: follow Dijkstra parents to the entrance,
+                // append its far endpoint, and resume goal planning after the
+                // odometry layer actually changes.
+                NavNodePtr gateway_entry = nullptr;
+                NavNodePtr gateway_exit = nullptr;
+                float best_gateway_cost = FARUtil::kINF;
+                for (const auto& node : current_graph_) {
+                    if (node == nullptr || !node->is_gateway || !node->is_traversable ||
+                        node->layer_id != odom_node_ptr_->layer_id) continue;
+                    for (const auto& neighbor : node->gateway_connects) {
+                        if (neighbor == nullptr ||
+                            std::abs(neighbor->layer_id - goal_ptr->layer_id) >=
+                            std::abs(node->layer_id - goal_ptr->layer_id)) continue;
+                        if (node->gscore < best_gateway_cost) {
+                            best_gateway_cost = node->gscore;
+                            gateway_entry = node;
+                            gateway_exit = neighbor;
+                        }
+                    }
+                }
+                if (gateway_entry != nullptr && gateway_exit != nullptr) {
+                    NodePtrStack gateway_path;
+                    if (this->ReconstructPath(gateway_entry, false, gateway_path)) {
+                        gateway_path.push_back(gateway_exit);
+                        global_path = gateway_path;
+                        _nav_node_ptr = this->NextNavWaypointFromPath(global_path, goal_ptr);
+                        _is_free_nav = false;
+                        is_free_nav_goal_ = false;
+                        RCLCPP_WARN_THROTTLE(
+                            nh_->get_logger(), *nh_->get_clock(), 3000,
+                            "GP: final cross-floor goal is not connected; navigating via reachable gateway %zu (layer %d) -> %zu (layer %d).",
+                            gateway_entry->id, gateway_entry->layer_id,
+                            gateway_exit->id, gateway_exit->layer_id);
+                        return true;
+                    }
+                }
+
+                // No gateway entrance is reachable yet. Keep the request alive
+                // and hold safely instead of clearing it after the first failed
+                // free/attemptable search.
+                global_path.push_back(odom_node_ptr_);
+                _nav_node_ptr = odom_node_ptr_;
+                _is_free_nav = false;
+                is_free_nav_goal_ = false;
+                int reachable_nodes = 0;
+                int current_layer_gateways = 0;
+                for (const auto& node : current_graph_) {
+                    if (node == nullptr) continue;
+                    if (node->is_traversable) ++reachable_nodes;
+                    if (node->is_gateway && node->layer_id == odom_node_ptr_->layer_id) {
+                        ++current_layer_gateways;
+                    }
+                }
+                RCLCPP_WARN_THROTTLE(
+                    nh_->get_logger(), *nh_->get_clock(), 3000,
+                    "GP: cross-floor route is not connected yet; holding. reachable_nodes=%d, current_layer_gateways=%d.",
+                    reachable_nodes, current_layer_gateways);
+                return true;
+            }
             if (gp_params_.is_autoswitch && is_free_nav_goal_) { // autoswitch to attemptable navigation
                 if (FARUtil::IsDebug) RCLCPP_WARN(nh_->get_logger(), "GP: free navigation fails, auto swiching to attemptable navigation...");
                 if (is_global_path_init_) {
                     global_path = recorded_path_;
                     _nav_node_ptr = this->NextNavWaypointFromPath(global_path, goal_ptr);
+                } else if (FARUtil::IsMultiLayer && odom_node_ptr_->layer_id != goal_ptr->layer_id) {
+                    // Never degrade a cross-floor request to a direct XY goal.
+                    // Doing so discards the layer constraint and makes the
+                    // local planner drive to the vertical projection of the
+                    // target on the current floor.
+                    global_path.push_back(odom_node_ptr_);
+                    _nav_node_ptr = odom_node_ptr_;
+                    _is_free_nav = false;
+                    RCLCPP_WARN_THROTTLE(
+                        nh_->get_logger(), *nh_->get_clock(), 3000,
+                        "GP: no cross-floor route yet; holding position until a gateway is available.");
                 } else {
                     _nav_node_ptr = goal_ptr;
                 }
@@ -317,6 +404,12 @@ NavNodePtr GraphPlanner::NextNavWaypointFromPath(const NodePtrStack& global_path
         // remaining z error.  A gateway is already terrain/traversal verified,
         // so advance through its two endpoints using planar convergence.
         if (FARUtil::IsMultiLayer && node_ptr->is_gateway) {
+            // XY proximity alone must not consume the far endpoint while the
+            // robot is still labelled on the source floor.  This matters for
+            // steep/compact stairs whose two gateway endpoints overlap in XY.
+            if (node_ptr->layer_id != odom_node_ptr_->layer_id) {
+                return FARUtil::kINF;
+            }
             return std::hypot(delta.x, delta.y);
         }
         return delta.norm();
@@ -330,25 +423,18 @@ NavNodePtr GraphPlanner::NextNavWaypointFromPath(const NodePtrStack& global_path
         } else break;
     }
 
-    // Treat a confirmed inter-floor edge as a transition corridor rather than
-    // two independent waypoints.  Replanning at the floor boundary can
-    // otherwise alternate between the two gateway endpoints as the odometry
-    // height moves around the layer threshold.  Look through the gateway pair
-    // and command the first ordinary node on the destination floor.
+    // Treat a confirmed inter-floor edge as a transition corridor, but never
+    // look through it to an ordinary node on the destination floor.  The local
+    // planner is planar: sending that distant node before the odometry layer
+    // changes makes it chase the destination XY on the current floor and can
+    // cut the tight landing corner.  Instead command the far endpoint of the
+    // gateway pair; after the hysteretic odometry layer switch, normal
+    // replanning advances to the destination-floor graph.
     if (FARUtil::IsMultiLayer && nav_point_ptr->is_gateway) {
-        const std::size_t search_begin = nav_idx > 0 ? nav_idx - 1 : 0;
-        for (std::size_t i = search_begin; i + 1 < path_size; ++i) {
-            if (!FARUtil::IsGatewayConnect(global_path[i], global_path[i + 1])) continue;
-            std::size_t exit_idx = i + 2;
-            while (exit_idx < path_size && global_path[exit_idx]->is_gateway) {
-                ++exit_idx;
-            }
-            if (exit_idx < path_size) {
-                nav_point_ptr = global_path[exit_idx];
-            } else {
-                nav_point_ptr = global_path.back();
-            }
-            break;
+        if (nav_idx + 1 < path_size &&
+            FARUtil::IsGatewayConnect(nav_point_ptr, global_path[nav_idx + 1]) &&
+            nav_point_ptr->layer_id == odom_node_ptr_->layer_id) {
+            nav_point_ptr = global_path[nav_idx + 1];
         }
     }
     return nav_point_ptr;
@@ -358,9 +444,14 @@ void GraphPlanner::UpdateGoal(const Point3D& goal) {
     this->GoalReset();
     is_use_internav_goal_ = false;
     float min_dist = FARUtil::kNearDist;
+    const int requested_layer = FARUtil::LayerId(goal.z);
     for (const auto& node_ptr : current_graph_) {
         node_ptr->is_block_to_goal = false;
-        if (node_ptr->is_navpoint) { // check if goal is near internav node
+        if (node_ptr->is_navpoint &&
+            (!FARUtil::IsMultiLayer || node_ptr->layer_id == requested_layer)) {
+            // In stacked buildings, nodes can be close in XYZ/XY tolerance
+            // while belonging to different floor graphs.  Never substitute a
+            // nearby navigation node from the wrong floor for the clicked goal.
             const float cur_dist = (node_ptr->position - goal).norm();
             if (cur_dist < min_dist) {
                 is_use_internav_goal_   = true;
@@ -374,7 +465,11 @@ void GraphPlanner::UpdateGoal(const Point3D& goal) {
         DynamicGraph::CreateNavNodeFromPoint(goal, goal_node_ptr_, false, false, true);
         DynamicGraph::AddNodeToGraph(goal_node_ptr_);
     }
-    if (FARUtil::IsDebug) RCLCPP_INFO(nh_->get_logger(), "GP: *********** new goal updated ***********");
+    RCLCPP_INFO(
+        nh_->get_logger(),
+        "GP: new goal (%.2f, %.2f, %.2f) assigned to layer %d; robot layer %d.",
+        goal_node_ptr_->position.x, goal_node_ptr_->position.y, goal_node_ptr_->position.z,
+        goal_node_ptr_->layer_id, odom_node_ptr_ == NULL ? -1 : odom_node_ptr_->layer_id);
     is_goal_init_          = true;
     is_global_path_init_   = false;
     is_terrain_associated_ = false;

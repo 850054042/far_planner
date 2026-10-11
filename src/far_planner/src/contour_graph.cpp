@@ -158,6 +158,20 @@ bool ContourGraph::IsPointsConnectFreePolygon(const ConnectPair& cedge,
                                               const HeightPair h_pair,
                                               const bool& is_global_check)
 {
+    const int query_layer = FARUtil::LayerId((h_pair.minH + h_pair.maxH) * 0.5f);
+    const auto polygon_is_on_query_layer = [query_layer](const PolygonPtr& poly_ptr) {
+        if (!FARUtil::IsMultiLayer || poly_ptr == nullptr || poly_ptr->vertices.empty()) {
+            return true;
+        }
+        // A polygon is a 2-D contour representation, but its vertices retain
+        // their source Z.  In an XY-overlapping building, only polygons from
+        // the queried floor may block an edge on that floor.
+        for (const auto& vertex : poly_ptr->vertices) {
+            if (FARUtil::LayerId(vertex.z) == query_layer) return true;
+        }
+        return false;
+    };
+
     // check for boundaries edges 
     for (const auto& contour : ContourGraph::boundary_contour_) {
         if (!ContourGraph::IsEdgeOverlapInHeight(h_pair, HeightPair(contour.first, contour.second))) continue;
@@ -172,6 +186,7 @@ bool ContourGraph::IsPointsConnectFreePolygon(const ConnectPair& cedge,
                                          0.0f);
         for (const auto& poly_ptr : ContourGraph::contour_polygons_) {
             if (poly_ptr->is_pillar) continue;
+            if (!polygon_is_on_query_layer(poly_ptr)) continue;
             if ((poly_ptr->is_robot_inside != FARUtil::PointInsideAPoly(poly_ptr->vertices, center_p)) || 
                 ContourGraph::IsEdgeCollidePoly(poly_ptr->vertices, cedge)) 
             {
@@ -199,6 +214,7 @@ bool ContourGraph::IsPointsConnectFreePolygon(const ConnectPair& cedge,
         }
         for (const auto& poly_ptr : ContourGraph::contour_polygons_) {
             if (poly_ptr->is_pillar) continue;
+            if (!polygon_is_on_query_layer(poly_ptr)) continue;
             if (ContourGraph::IsEdgeCollidePoly(poly_ptr->vertices, cedge)) {
                 return false;
             }
