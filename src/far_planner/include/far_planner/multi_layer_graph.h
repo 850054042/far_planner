@@ -9,6 +9,7 @@ struct MultiLayerGraphParams {
     bool enabled = false;
     float floor_height = 2.5f;
     float floor_origin_z = 0.0f;
+    std::vector<float> floor_elevations;
     bool auto_floor_origin = true;
     float gateway_max_xy_dist = 1.5f;
     float gateway_min_z_delta = 0.05f;

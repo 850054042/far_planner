@@ -588,6 +588,8 @@ void FARMaster::LoadROSParams() {
   // Multi-floor graph and gateway parameters
   nh_->declare_parameter<bool>(layer_prefix + "/auto_floor_origin", true);
   nh_->declare_parameter<float>(layer_prefix + "/floor_origin_z", 0.0);
+  nh_->declare_parameter<std::vector<double>>(
+      layer_prefix + "/floor_elevations", std::vector<double>{});
   nh_->declare_parameter<float>(layer_prefix + "/gateway_max_xy_dist", 1.5);
   nh_->declare_parameter<float>(layer_prefix + "/gateway_min_z_delta", 0.05);
   nh_->declare_parameter<float>(layer_prefix + "/gateway_max_slope", 0.6);
@@ -598,6 +600,9 @@ void FARMaster::LoadROSParams() {
 
   nh_->get_parameter(layer_prefix + "/auto_floor_origin", layer_params_.auto_floor_origin);
   nh_->get_parameter(layer_prefix + "/floor_origin_z", layer_params_.floor_origin_z);
+  std::vector<double> floor_elevations;
+  nh_->get_parameter(layer_prefix + "/floor_elevations", floor_elevations);
+  layer_params_.floor_elevations.assign(floor_elevations.begin(), floor_elevations.end());
   nh_->get_parameter(layer_prefix + "/gateway_max_xy_dist", layer_params_.gateway_max_xy_dist);
   nh_->get_parameter(layer_prefix + "/gateway_min_z_delta", layer_params_.gateway_min_z_delta);
   nh_->get_parameter(layer_prefix + "/gateway_max_slope", layer_params_.gateway_max_slope);
@@ -914,6 +919,7 @@ int     FARUtil::kObsInflate;
 float   FARUtil::kTolerZ;
 float   FARUtil::kFloorHeight;
 float   FARUtil::kFloorOriginZ;
+std::vector<float> FARUtil::kFloorElevations;
 float   FARUtil::kInterLayerCostScale = 1.0f;
 bool    FARUtil::IsFloorOriginInitialized = false;
 float   FARUtil::kAcceptAlign;

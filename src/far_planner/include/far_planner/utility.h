@@ -115,6 +115,7 @@ public:
     static float kTolerZ;
     static float kFloorHeight;
     static float kFloorOriginZ;
+    static std::vector<float> kFloorElevations;
     static float kInterLayerCostScale;
     static bool  IsFloorOriginInitialized;
     static float kAcceptAlign;
@@ -322,7 +323,33 @@ public:
 
     static inline int LayerId(const float z) {
         if (!IsMultiLayer || !IsFloorOriginInitialized || kFloorHeight < kEpsilon) return 0;
+        if (!kFloorElevations.empty()) {
+            int nearest_id = 0;
+            float nearest_dist = std::abs(z - kFloorElevations.front());
+            for (std::size_t i = 1; i < kFloorElevations.size(); ++i) {
+                const float distance = std::abs(z - kFloorElevations[i]);
+                if (distance < nearest_dist) {
+                    nearest_dist = distance;
+                    nearest_id = static_cast<int>(i);
+                }
+            }
+            return nearest_id;
+        }
         return static_cast<int>(std::lround((z - kFloorOriginZ) / kFloorHeight));
+    }
+
+    static inline float LayerElevation(const int layer_id) {
+        if (!kFloorElevations.empty()) {
+            const int bounded_id = std::max(
+                0, std::min(layer_id, static_cast<int>(kFloorElevations.size()) - 1));
+            return kFloorElevations[bounded_id];
+        }
+        return kFloorOriginZ + static_cast<float>(layer_id) * kFloorHeight;
+    }
+
+    static inline float LayerSeparation(const int layer_a, const int layer_b) {
+        return std::max(kEpsilon,
+            std::abs(LayerElevation(layer_a) - LayerElevation(layer_b)));
     }
 
     static inline bool IsGatewayConnect(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {

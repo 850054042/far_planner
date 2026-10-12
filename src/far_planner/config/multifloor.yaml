@@ -17,12 +17,18 @@ far_planner:
 
     multi_layer/auto_floor_origin: true
     multi_layer/floor_origin_z: 0.0
+    # Sensor/odometry elevations for a non-uniform four-level building.
+    # Empty keeps the original equally spaced floor-height behaviour.
+    multi_layer/floor_elevations: [0.55, 2.65, 5.05, 7.35]
     # Trajectory nodes are roughly robot_dim (0.8 m) apart. On discrete 0.15 m
     # steps their placement can skip several tread boundaries, so keep margin
     # for a sparse but physically traversed edge.
-    multi_layer/gateway_max_xy_dist: 2.0
+    # Four-level flights can place 0.8 m breadcrumbs on opposite sides of a
+    # boundary more than 2 m apart. They are still physical trajectory nodes,
+    # so allow one sparse-sampling interval of additional margin.
+    multi_layer/gateway_max_xy_dist: 2.8
     multi_layer/gateway_min_z_delta: 0.05
-    multi_layer/gateway_max_slope: 0.85
+    multi_layer/gateway_max_slope: 1.2
     multi_layer/gateway_confirmations: 2
     # Prevent the robot's floor label from flipping repeatedly near the ramp
     # midpoint because of terrain-height noise.
@@ -42,7 +48,7 @@ far_planner:
     graph_msger/robot_id: 1  # graph from robot id "0" is extracted from files
 
     # Map Handler Params
-    map_handler/floor_height: 2.1     # Unit: meter (14 * 0.15 m)
+    map_handler/floor_height: 2.4     # Nominal/max local vertical map span
     map_handler/cell_length: 5.0     # Unit: meter
     map_handler/map_grid_max_length: 1000.0   # Unit: meter
     map_handler/map_grad_max_height: 100.0   # Unit: meter

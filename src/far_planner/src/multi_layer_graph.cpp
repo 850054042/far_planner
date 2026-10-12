@@ -10,8 +10,16 @@ void MultiLayerGraph::Init(const rclcpp::Node::SharedPtr nh,
     params_ = params;
     Reset();
     FARUtil::kFloorHeight = params_.floor_height;
+    FARUtil::kFloorElevations = params_.floor_elevations;
+    std::sort(FARUtil::kFloorElevations.begin(), FARUtil::kFloorElevations.end());
     FARUtil::kInterLayerCostScale = std::max(1.0f, FARUtil::kInterLayerCostScale);
-    if (!params_.auto_floor_origin) {
+    if (!FARUtil::kFloorElevations.empty()) {
+        FARUtil::kFloorOriginZ = FARUtil::kFloorElevations.front();
+        FARUtil::IsFloorOriginInitialized = true;
+        RCLCPP_INFO(nh_->get_logger(),
+            "MultiLayerGraph: using %zu explicit, non-uniform floor elevations.",
+            FARUtil::kFloorElevations.size());
+    } else if (!params_.auto_floor_origin) {
         FARUtil::kFloorOriginZ = params_.floor_origin_z;
         FARUtil::IsFloorOriginInitialized = true;
     }
@@ -22,7 +30,7 @@ void MultiLayerGraph::Reset() {
     pending_gateways_.clear();
     robot_layer_id_ = 0;
     robot_layer_initialized_ = false;
-    if (params_.auto_floor_origin) {
+    if (params_.auto_floor_origin && FARUtil::kFloorElevations.empty()) {
         FARUtil::IsFloorOriginInitialized = false;
     }
 }
@@ -35,11 +43,37 @@ void MultiLayerGraph::RefreshLayers(const NodePtrStack& graph) {
             continue;
         }
 
-        const int measured_layer = FARUtil::LayerId(node->position.z);
+        int measured_layer = FARUtil::LayerId(node->position.z);
         if (!robot_layer_initialized_) {
             robot_layer_id_ = measured_layer;
             robot_layer_initialized_ = true;
-        } else if (measured_layer != robot_layer_id_) {
+        } else {
+            // LayerId changes at the exact elevation midpoint.  A planar
+            // follower can stop on a stair tread just below that midpoint, so
+            // the measured label would never differ and the transition logic
+            // below would not run.  Promote the adjacent layer once the robot
+            // enters the directional hysteresis overlap band.
+            if (!FARUtil::kFloorElevations.empty()) {
+                if (robot_layer_id_ + 1 <
+                    static_cast<int>(FARUtil::kFloorElevations.size())) {
+                    const float upper_boundary = 0.5f * (
+                        FARUtil::LayerElevation(robot_layer_id_) +
+                        FARUtil::LayerElevation(robot_layer_id_ + 1));
+                    if (node->position.z > upper_boundary - params_.layer_hysteresis) {
+                        measured_layer = robot_layer_id_ + 1;
+                    }
+                }
+                if (robot_layer_id_ > 0) {
+                    const float lower_boundary = 0.5f * (
+                        FARUtil::LayerElevation(robot_layer_id_ - 1) +
+                        FARUtil::LayerElevation(robot_layer_id_));
+                    if (node->position.z < lower_boundary + params_.layer_hysteresis) {
+                        measured_layer = robot_layer_id_ - 1;
+                    }
+                }
+            }
+        }
+        if (measured_layer != robot_layer_id_) {
             // Reaching the opposite endpoint of a confirmed gateway is
             // stronger transition evidence than raw height alone.  A compact
             // staircase can place that endpoint inside the normal hysteresis
@@ -50,7 +84,8 @@ void MultiLayerGraph::RefreshLayers(const NodePtrStack& graph) {
                 if (gateway == nullptr || gateway->layer_id != measured_layer) continue;
                 const Point3D delta = gateway->position - node->position;
                 if (std::hypot(delta.x, delta.y) <= FARUtil::kNearDist &&
-                    std::abs(delta.z) <= params_.floor_height * 0.5f) {
+                    std::abs(delta.z) <=
+                        FARUtil::LayerSeparation(robot_layer_id_, measured_layer) * 0.5f) {
                     reached_confirmed_gateway = true;
                     break;
                 }
@@ -65,12 +100,20 @@ void MultiLayerGraph::RefreshLayers(const NodePtrStack& graph) {
                 continue;
             }
             const int direction = measured_layer > robot_layer_id_ ? 1 : -1;
-            const float boundary_z = FARUtil::kFloorOriginZ +
-                (static_cast<float>(robot_layer_id_) + 0.5f * direction) *
-                FARUtil::kFloorHeight;
+            const float boundary_z = 0.5f * (
+                FARUtil::LayerElevation(robot_layer_id_) +
+                FARUtil::LayerElevation(robot_layer_id_ + direction));
+            // The local planner is planar and can stop at the XY position of
+            // a gateway before the chassis reaches the far side's nominal Z.
+            // Use the hysteresis band as an overlap region entered from the
+            // current layer; requiring boundary+hysteresis when climbing (or
+            // boundary-hysteresis when descending) creates a deadlock exactly
+            // at the stair midpoint.  Directional state still prevents an
+            // immediate switch back until the opposite side of the band is
+            // crossed.
             const bool crossed = direction > 0
-                ? node->position.z > boundary_z + params_.layer_hysteresis
-                : node->position.z < boundary_z - params_.layer_hysteresis;
+                ? node->position.z > boundary_z - params_.layer_hysteresis
+                : node->position.z < boundary_z + params_.layer_hysteresis;
             if (crossed) robot_layer_id_ = measured_layer;
         }
         node->layer_id = robot_layer_id_;
@@ -94,7 +137,7 @@ bool MultiLayerGraph::IsGatewayStillValid(const NavNodePtr& node1,
     const float xy_dist = std::hypot(delta.x, delta.y);
     const float z_dist = std::abs(delta.z);
     if (xy_dist > params_.gateway_max_xy_dist || z_dist < params_.gateway_min_z_delta) return false;
-    if (z_dist > params_.floor_height * 0.75f) return false;
+    if (z_dist > FARUtil::LayerSeparation(node1->layer_id, node2->layer_id) * 0.75f) return false;
 
     // PCT-style gateway test in graph form: the layer label changes while the
     // sampled ground remains spatially continuous (bounded local slope).
@@ -178,46 +221,65 @@ void MultiLayerGraph::Update(NodePtrStack& graph, const NavNodePtr& odom_node) {
         }
     }
 
-    if (!gateway_nodes_.empty()) traversed_gateway_found = true;
-
     // The dynamic graph may skip a direct trajectory connection when a stair
     // node temporarily leaves the local active set. If both adjacent floors
     // nevertheless contain navpoints created from the robot's real path, use
     // the closest geometrically valid pair as the traversed transition. This
     // remains stricter than ordinary visibility-edge inference because contour
     // and frontier nodes are never considered.
-    if (!traversed_gateway_found && robot_layer_initialized_ && robot_layer_id_ != 0) {
-        NavNodePtr best_node1 = nullptr;
-        NavNodePtr best_node2 = nullptr;
-        float best_distance = FARUtil::kINF;
-        for (std::size_t i = 0; i < graph.size(); ++i) {
-            const auto& node1 = graph[i];
-            if (node1 == nullptr || node1->is_odom || !node1->is_navpoint) continue;
-            for (std::size_t j = i + 1; j < graph.size(); ++j) {
-                const auto& node2 = graph[j];
-                if (node2 == nullptr || node2->is_odom || !node2->is_navpoint ||
-                    FARUtil::IsAtSameLayer(node1, node2) ||
-                    !IsGatewayStillValid(node1, node2)) continue;
-                const float distance = (node2->position - node1->position).norm();
-                if (distance < best_distance) {
-                    best_distance = distance;
-                    best_node1 = node1;
-                    best_node2 = node2;
-                }
+    if (robot_layer_initialized_ && robot_layer_id_ != 0) {
+        int max_observed_layer = robot_layer_id_;
+        for (const auto& node : graph) {
+            if (node != nullptr && node->is_navpoint) {
+                max_observed_layer = std::max(max_observed_layer, node->layer_id);
             }
         }
-        if (best_node1 != nullptr && best_node2 != nullptr) {
-            const bool recovered_is_new =
-                !FARUtil::IsGatewayConnect(best_node1, best_node2);
-            ActivateGateway(best_node1, best_node2);
-            traversed_gateway_found = true;
-            if (recovered_is_new) {
+        for (int lower_layer = 0; lower_layer < max_observed_layer; ++lower_layer) {
+            bool pair_already_connected = false;
+            for (const auto& node : graph) {
+                if (node == nullptr || !node->is_gateway || node->layer_id != lower_layer) continue;
+                for (const auto& gateway : node->gateway_connects) {
+                    if (gateway != nullptr && gateway->layer_id == lower_layer + 1) {
+                        pair_already_connected = true;
+                        break;
+                    }
+                }
+                if (pair_already_connected) break;
+            }
+            if (pair_already_connected) continue;
+
+            NavNodePtr best_node1 = nullptr;
+            NavNodePtr best_node2 = nullptr;
+            float best_distance = FARUtil::kINF;
+            for (std::size_t i = 0; i < graph.size(); ++i) {
+                const auto& node1 = graph[i];
+                if (node1 == nullptr || node1->is_odom || !node1->is_navpoint ||
+                    node1->layer_id != lower_layer) continue;
+                for (std::size_t j = i + 1; j < graph.size(); ++j) {
+                    const auto& node2 = graph[j];
+                    if (node2 == nullptr || node2->is_odom || !node2->is_navpoint ||
+                        node2->layer_id != lower_layer + 1 ||
+                        !IsGatewayStillValid(node1, node2)) continue;
+                    const float distance = (node2->position - node1->position).norm();
+                    if (distance < best_distance) {
+                        best_distance = distance;
+                        best_node1 = node1;
+                        best_node2 = node2;
+                    }
+                }
+            }
+            if (best_node1 != nullptr && best_node2 != nullptr) {
+                ActivateGateway(best_node1, best_node2);
+                traversed_gateway_found = true;
                 RCLCPP_INFO(nh_->get_logger(),
-                    "Recovered traversed gateway from nearest adjacent-layer "
-                    "trajectory nodes (distance %.2f m).", best_distance);
+                    "Recovered traversed gateway for layer pair %d<->%d from "
+                    "nearest trajectory nodes (distance %.2f m).",
+                    lower_layer, lower_layer + 1, best_distance);
             }
         }
     }
+
+    if (!gateway_nodes_.empty()) traversed_gateway_found = true;
 
     if (robot_layer_initialized_ && robot_layer_id_ != 0 &&
         !traversed_gateway_found &&
