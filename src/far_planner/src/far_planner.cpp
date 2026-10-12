@@ -326,6 +326,21 @@ void FARMaster::PlanningCallBack() {
         // metres away from the stair entrance (and even behind the robot),
         // which breaks an otherwise valid multi-hop Dijkstra route.
         waypoint = nav_node_ptr_->position;
+        if (odom_node_ptr_ != nullptr &&
+            nav_node_ptr_->layer_id != odom_node_ptr_->layer_id) {
+          // The planar path follower intentionally stops short of its target.
+          // For the far endpoint of a gateway that can leave the chassis on
+          // the last source-floor tread.  Add only a bounded continuation in
+          // the actual approach direction so the support model can carry Z
+          // across the transition; never use contour/viewpoint projection.
+          Point3D approach = waypoint - robot_pos_;
+          approach.z = 0.0f;
+          const float approach_norm = approach.norm();
+          if (approach_norm > FARUtil::kEpsilon) {
+            waypoint = waypoint + approach / approach_norm * 0.65f;
+            waypoint.z = nav_node_ptr_->position.z;
+          }
+        }
       } else if (nav_node_ptr_ != goal_ptr) {
         waypoint = this->ProjectNavWaypoint(nav_node_ptr_, last_nav_ptr);
       } else if (master_params_.is_viewpoint_extend) {
