@@ -320,6 +320,12 @@ void FARMaster::PlanningCallBack() {
         // while a requested cross-floor route has no confirmed gateway.  Do
         // not viewpoint-extend this node, otherwise the hold can become motion.
         waypoint = robot_pos_;
+      } else if (FARUtil::IsMultiLayer && nav_node_ptr_->is_gateway) {
+        // A gateway endpoint is a semantic transition target, not a contour
+        // viewpoint.  Extending/projecting it can move the command several
+        // metres away from the stair entrance (and even behind the robot),
+        // which breaks an otherwise valid multi-hop Dijkstra route.
+        waypoint = nav_node_ptr_->position;
       } else if (nav_node_ptr_ != goal_ptr) {
         waypoint = this->ProjectNavWaypoint(nav_node_ptr_, last_nav_ptr);
       } else if (master_params_.is_viewpoint_extend) {
